@@ -111,6 +111,7 @@ def route_status() -> dict[str, Any]:
         info["version"] = client.version()
         installed = client.models()
         info["model"] = resolve_model("fast", config.roles, installed)
+        info["installed"] = [m.to_dict() for m in installed]     # sizes: light mode picks the smallest (gpu_ai)
         info["reachable"] = True
     except (OllamaError, ValueError) as exc:
         info["error"] = str(exc)

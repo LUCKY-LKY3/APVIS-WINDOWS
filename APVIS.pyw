@@ -16,6 +16,29 @@ QML = APP / "qml" / "Home.qml"
 DATA = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "APVIS"
 
 
+def use_neural_look() -> None:
+    """The Windows app's look is APVIS 7's blue "Neural Fabric" (owner, 2026-10-20). Set it once; a look picked in
+    Settings afterwards is kept."""
+    import json
+    marker = DATA / "neural-look-set"
+    if marker.exists():
+        return
+    prefs_file = Path.home() / ".config" / "apvis" / "ui.json"
+    try:
+        prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prefs = {}
+    if not isinstance(prefs, dict):
+        prefs = {}
+    prefs["accent"] = "neural"
+    try:
+        prefs_file.parent.mkdir(parents=True, exist_ok=True)
+        prefs_file.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+        marker.write_text("1", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def main() -> int:
     DATA.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("APVIS_OS_STATE_DIR", str(DATA / "state"))
@@ -23,6 +46,7 @@ def main() -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "windows")
     os.environ.setdefault("APVIS_GAME_MODE", "1")
     (DATA / "run").mkdir(exist_ok=True)
+    use_neural_look()
     sys.path.insert(0, str(APP))
 
     # pythonw has no console: keep a log of anything that goes wrong.

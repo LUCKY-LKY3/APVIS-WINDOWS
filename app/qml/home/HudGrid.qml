@@ -15,11 +15,11 @@ Canvas {
         c.reset(); c.clearRect(0, 0, w, h)
         // Minor and major grid lines.
         for (let x = 0; x <= w; x += 32) {
-            c.strokeStyle = rgba(Theme.accent, x % 160 === 0 ? 0.055 : 0.022); c.lineWidth = 1
+            c.strokeStyle = rgba(Theme.accent, x % 160 === 0 ? 0.09 : 0.04); c.lineWidth = 1
             c.beginPath(); c.moveTo(x + .5, 0); c.lineTo(x + .5, h); c.stroke()
         }
         for (let y = 0; y <= h; y += 32) {
-            c.strokeStyle = rgba(Theme.accent, y % 160 === 0 ? 0.055 : 0.022)
+            c.strokeStyle = rgba(Theme.accent, y % 160 === 0 ? 0.09 : 0.04)
             c.beginPath(); c.moveTo(0, y + .5); c.lineTo(w, y + .5); c.stroke()
         }
         // Small crosses where major lines meet.

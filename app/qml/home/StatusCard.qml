@@ -40,6 +40,9 @@ GlassCard {
     }
     spacing: 0
     Metric { glyph: "cpu"; label: "CPU"; value: card.known ? card.sys.cpu : null }
+    // The graphics card (APVIS for Windows, from game mode's NVIDIA readings).
+    readonly property var gpu: (shell.game || {}).gpu || null
+    Metric { visible: !!card.gpu; glyph: "chip"; label: "GPU"; value: card.gpu ? card.gpu.util : null }
     Metric { glyph: "memory"; label: "Memory"; value: card.known ? card.sys.memory : null }
     Metric { glyph: "storage"; label: "Storage"; value: card.known && card.sys.disk !== null ? card.sys.disk : null }
     Item {

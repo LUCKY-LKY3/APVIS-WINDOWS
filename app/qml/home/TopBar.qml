@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import "../theme"
 
 // The menu bar (owner concept): APVIS mark and menus on the left, real status
@@ -12,6 +13,8 @@ Item {
     property bool powerOpen: false
     signal action(string key)
     height: 40
+    readonly property bool app: typeof windowsApp !== "undefined" && windowsApp
+    readonly property var ai: (typeof shell.aiStatus !== "undefined" && shell.aiStatus) ? shell.aiStatus : ({})
 
     readonly property var sys: shell.system || ({})
     readonly property var menus: ({
@@ -49,6 +52,7 @@ Item {
             width: 30; height: 30; anchors.verticalCenter: parent.verticalCenter
             Accessible.name: "APVIS Home and open apps"
             onClicked: {
+                if (bar.app) { bar.action("page:"); return }
                 if (bar.openMenu === "Windows") { bar.openMenu = ""; return }
                 shell.refreshWindows()
                 bar.openMenu = "Windows"
@@ -57,8 +61,12 @@ Item {
                                     border.width: logoButton.visualFocus ? 1.5 : 0; border.color: Theme.text }
             contentItem: ApvisMark { glow: logoButton.hovered ? 1.0 : 0.5 }
         }
+        Text { visible: bar.app; anchors.verticalCenter: parent.verticalCenter; text: "APVIS"; color: Theme.text
+               font.pixelSize: 15; font.letterSpacing: 4; font.weight: Font.Medium }
+        Text { visible: bar.app; anchors.verticalCenter: parent.verticalCenter; text: "//   INTELLIGENCE STAGE"; color: Theme.muted
+               font.pixelSize: 12; font.letterSpacing: 2.4 }
         Repeater {
-            model: ["System", "Apps", "APVIS", "Settings"]
+            model: bar.app ? [] : ["System", "Apps", "APVIS", "Settings"]
             delegate: AbstractButton {
                 id: menuTitle
                 required property string modelData
@@ -84,8 +92,34 @@ Item {
     Row {
         id: right
         anchors.right: parent.right; anchors.rightMargin: 14; height: parent.height; spacing: 18
+        // APVIS for Windows: live readings as header chips.
+        Repeater {
+            model: bar.app ? [["CPU", bar.sys.cpu !== undefined && bar.sys.cpu !== null ? Math.round(bar.sys.cpu) + "%" : "—"],
+                              ["RAM", bar.sys.memory !== undefined && bar.sys.memory !== null ? Math.round(bar.sys.memory) + "%" : "—"],
+                              ["GPU", (shell.game || {}).gpu && shell.game.gpu.temp !== null ? shell.game.gpu.temp + "°C" : "—"]] : []
+            delegate: Row {
+                required property var modelData
+                anchors.verticalCenter: parent.verticalCenter; spacing: 6
+                Text { anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; color: Theme.accent; font.pixelSize: 10; font.letterSpacing: 1.6 }
+                Text { anchors.verticalCenter: parent.verticalCenter; text: modelData[1]; color: Theme.text; font.pixelSize: 12; font.family: Theme.monoFont }
+            }
+        }
+        Rectangle { visible: bar.app; anchors.verticalCenter: parent.verticalCenter; width: 1; height: 16; color: Theme.line }
+        // APVIS for Windows: where Ask runs right now (graphics card, or light mode while gaming).
+        Row {
+            visible: bar.app
+            anchors.verticalCenter: parent.verticalCenter; spacing: 7
+            readonly property string mode: bar.ai.mode || ((shell.route || {}).reachable ? "gpu" : "off")
+            Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 7; height: 7; radius: 3.5
+                        color: parent.mode === "gpu" ? Theme.signal : parent.mode === "light" ? Theme.attention : Theme.muted }
+            Text { anchors.verticalCenter: parent.verticalCenter; color: Theme.muted; font.pixelSize: 12
+                   text: (bar.ai.model || (shell.route || {}).model || "Local AI offline") + (parent.mode === "light" ? "  ·  light mode" : "") }
+        }
+        Text { visible: bar.app; anchors.verticalCenter: parent.verticalCenter; color: Theme.muted; font.pixelSize: 12; font.family: Theme.monoFont
+               text: Qt.formatDateTime(new Date(bar.now.getTime() + bar.now.getTimezoneOffset() * 60000), "HH:mm") + "Z" }
         // Network: Wi-Fi when joined, wired when plugged in, dim when neither.
         Glyph {
+            visible: !bar.app
             anchors.verticalCenter: parent.verticalCenter; width: 17; height: 17
             readonly property bool wifi: !!(bar.sys.wifi && bar.sys.wifi.connected)
             kind: wifi ? "wifi" : "wired"
@@ -96,6 +130,7 @@ Item {
             MouseArea { id: netMouse; anchors.fill: parent; hoverEnabled: true; onClicked: bar.action("control") }
         }
         Item {
+            visible: !bar.app
             anchors.verticalCenter: parent.verticalCenter
             width: volRow.width; height: 24
             Row {
@@ -123,6 +158,16 @@ Item {
                MouseArea { id: wxHover; anchors.fill: parent; hoverEnabled: true } }
         Text { anchors.verticalCenter: parent.verticalCenter; text: Qt.formatDateTime(bar.now, "ddd d MMM"); color: Theme.text; font.pixelSize: 14 }
         Text { anchors.verticalCenter: parent.verticalCenter; text: Qt.formatDateTime(bar.now, "HH:mm"); color: Theme.text; font.pixelSize: 14; font.weight: Font.Medium }
+        // APVIS for Windows: minimise (the power button closes the app).
+        AbstractButton {
+            id: minButton
+            visible: bar.app
+            width: 30; height: 28; anchors.verticalCenter: parent.verticalCenter
+            Accessible.name: "Minimise APVIS"
+            onClicked: bar.Window.window.showMinimized()
+            background: Rectangle { radius: 6; color: minButton.hovered ? Theme.sheen(0.07) : "transparent" }
+            contentItem: Item { Rectangle { anchors.centerIn: parent; width: 12; height: 1.5; color: Theme.text } }
+        }
         AbstractButton {
             id: powerButton
             width: 30; height: 28; anchors.verticalCenter: parent.verticalCenter

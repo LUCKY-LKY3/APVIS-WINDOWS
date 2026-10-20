@@ -262,7 +262,7 @@ Item {
                         Row {
                             spacing: 12
                             Repeater {
-                                model: [["lacquer", Theme.accents["lacquer"].accent, "Lacquer and brass"], ["apvis", Theme.accents["apvis"].accent, "APVIS green (V2)"], ["emerald", Theme.accents["emerald"].accent, "Emerald"], ["aqua", Theme.accents["aqua"].accent, "Aqua"],
+                                model: [["neural", Theme.accents["neural"].accent, "Neural Fabric (APVIS 7 blue)"], ["lacquer", Theme.accents["lacquer"].accent, "Lacquer and brass"], ["apvis", Theme.accents["apvis"].accent, "APVIS green (V2)"], ["emerald", Theme.accents["emerald"].accent, "Emerald"], ["aqua", Theme.accents["aqua"].accent, "Aqua"],
                                         ["cyan-steel", Theme.accents["cyan-steel"].accent, "Cyan steel"], ["emerald-silver", Theme.accents["emerald-silver"].accent, "Emerald silver"], ["cool-white", Theme.accents["cool-white"].accent, "Cool white"]]
                                 delegate: AbstractButton {
                                     id: swatch

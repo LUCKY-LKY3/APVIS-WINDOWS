@@ -8,13 +8,17 @@ Layers: USGS earthquakes (M2.5+, 24 h), NASA EONET natural events (open),
 GDACS disaster alerts (UN/EU), the ISS position (wheretheiss.at), NOAA SWPC
 planetary K-index (space weather), TfL JamCams (official public London traffic
 cameras), world news (GDELT + BBC World headlines) and markets (Yahoo Finance
-public chart data, delayed; CoinGecko for crypto). Only official public feeds:
-no private or unsecured cameras. BBC Technology and Science headlines serve
-Ask's news catch-up (briefing.py), not the Atlas.
+public chart data, delayed; CoinGecko for crypto), NOAA SWPC space weather
+alerts, watches and warnings, and tech + science news (BBC Technology and BBC
+Science, also reused by Ask's news catch-up in briefing.py). Only official public
+feeds: no private or unsecured cameras.
+
+intel_feed() merges a snapshot into one newest-first live intelligence feed.
 """
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import urllib.parse
@@ -153,6 +157,37 @@ def parse_swpc(data: list[Any]) -> list[dict[str, Any]]:
              "level": kp_level(kp), "time": str(last.get("time_tag") or "")}]
 
 
+SWPC_ALERT_MAX_AGE_DAYS = 3
+_SWPC_KINDS = ("ALERT", "WARNING", "WATCH", "SUMMARY", "EXTENDED WARNING", "CANCEL WARNING", "CANCEL WATCH",
+               "CANCEL SUMMARY", "CANCEL ALERT")
+
+
+def parse_swpc_alerts(data: list[Any], now: float | None = None) -> list[dict[str, Any]]:
+    """NOAA SWPC alerts, watches and warnings from the last few days, newest first."""
+    items = []
+    for row in data if isinstance(data, list) else []:
+        if not isinstance(row, dict):
+            continue
+        message, stamp = str(row.get("message") or ""), str(row.get("issue_datetime") or "")
+        when = stamp.replace(" ", "T", 1) + ("" if stamp.endswith("Z") else "Z") if stamp else ""
+        if not when or not _recent(when, SWPC_ALERT_MAX_AGE_DAYS, now):
+            continue
+        lines = [ln.strip() for ln in message.splitlines()]
+        head = next((ln for ln in lines if ln.split(":", 1)[0].strip().upper() in _SWPC_KINDS and ":" in ln), "")
+        if not head:
+            continue
+        kind, text = (part.strip() for part in head.split(":", 1))
+        serial = next((ln.split(":", 1)[1].strip() for ln in lines if ln.lower().startswith("serial number:")), "")
+        scale = next((ln.split(":", 1)[1].strip() for ln in lines if ln.lower().startswith("noaa scale:")), "")
+        level = re.search(r"\b([GSR])([1-5])\b", scale or text)
+        items.append({"id": f"{row.get('product_id') or ''}-{serial or stamp}", "kind": "spacealert",
+                      "title": f"{kind.title()}: {text}", "detail": scale, "type": kind.upper(),
+                      "scale": level.group(0) if level else "", "time": when,
+                      "url": "https://www.swpc.noaa.gov/products/alerts-watches-and-warnings"})
+    items.sort(key=lambda r: r["time"], reverse=True)
+    return items[:20]
+
+
 def parse_jamcams(data: list[Any]) -> list[dict[str, Any]]:
     items = []
     for cam in data if isinstance(data, list) else []:
@@ -288,6 +323,11 @@ def fetch_news(fetch: Callable[[str], bytes], topics: tuple[str, ...] = ("world"
     return rows[:60]
 
 
+def fetch_tech_news(fetch: Callable[[str], bytes]) -> list[dict[str, Any]]:
+    """BBC Technology and BBC Science headlines, newest first."""
+    return fetch_news(fetch, ("tech", "science"))[:40]
+
+
 def _gdelt_time(stamp: str) -> str:
     """20260925T183000Z -> 2026-09-25T18:30:00Z"""
     if len(stamp) >= 15 and stamp[8] == "T":
@@ -324,6 +364,10 @@ LAYERS = (
           "", 300, lambda _: [], custom=fetch_markets),
     Layer("news", "World news", "GDELT + BBC World", "headlines link to their publishers",
           "", 1800, lambda _: [], custom=fetch_news),
+    Layer("spacealerts", "Space weather alerts", "NOAA SWPC", "US Government public domain",
+          "https://services.swpc.noaa.gov/products/alerts.json", 900, parse_swpc_alerts),
+    Layer("technews", "Tech and science news", "BBC Technology + BBC Science", "headlines link to their publishers",
+          "", 1800, lambda _: [], custom=fetch_tech_news),
 )
 
 
@@ -377,3 +421,140 @@ class OsintFeed:
                               "status": state.status, "fetched_at": state.fetched_at, "age_s": age,
                               "error": state.error, "items": state.items}
         return out
+
+
+# ---------------------------------------------------------------- live intelligence feed
+
+FEED_LAYERS = ("quakes", "alerts", "events", "space", "spacealerts", "markets", "news", "technews")
+MARKET_MOVE_PCT = 2.0           # a market enters the feed only when it moves this much on the day
+SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def _time_ms(item: dict[str, Any]) -> int:
+    """Event time in epoch ms from time_ms or an ISO-ish `time`; 0 when unknown."""
+    if isinstance(item.get("time_ms"), (int, float)) and item["time_ms"] > 0:
+        return int(item["time_ms"])
+    stamp = str(item.get("time") or "").strip()
+    if not stamp:
+        return 0
+    try:
+        from datetime import datetime, timezone
+        when = datetime.fromisoformat(stamp.replace(" ", "T", 1).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return int(when.timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
+def _quake_severity(mag: float, tsunami: bool) -> str:
+    return "high" if mag >= 6 or tsunami else "medium" if mag >= 4.5 else "low"
+
+
+def _kp_severity(kp: float) -> str:
+    return "high" if kp >= 7 else "medium" if kp >= 5 else "low"          # G3+ / G1-G2 / below storm
+
+
+def _spacealert_severity(item: dict[str, Any]) -> str:
+    scale = str(item.get("scale") or "")
+    level = int(scale[1]) if len(scale) == 2 and scale[1].isdigit() else 0
+    if level >= 3:
+        return "high"
+    if level or item.get("type") in {"ALERT", "WARNING", "EXTENDED WARNING"}:
+        return "medium"
+    return "low"
+
+
+def _feed_item(layer: str, item: dict[str, Any], source: str) -> dict[str, Any] | None:
+    """One snapshot item as a feed row, or None when it does not belong in the feed."""
+    time_ms = _time_ms(item)
+    if not time_ms or not str(item.get("title") or "").strip():
+        return None                 # the feed is time-ordered: undated rows can't be placed
+    row = {"id": f"{layer}:{item.get('id') or item.get('url') or item.get('title')}", "time_ms": time_ms,
+           "kind": str(item.get("kind") or layer), "title": str(item["title"]).strip(),
+           "detail": str(item.get("detail") or ""), "place": "", "lat": _num(item.get("lat")), "lon": _num(item.get("lon")),
+           "source": str(item.get("source") or source), "url": str(item.get("url") or ""), "severity": "low"}
+    if layer == "quakes":
+        mag = _num(item.get("mag")) or 0.0
+        depth = _num(item.get("depth_km"))
+        row["place"] = row["detail"]
+        row["detail"] = " · ".join(x for x in (f"depth {depth:.0f} km" if depth is not None else "",
+                                               "tsunami flag" if item.get("tsunami") else "") if x)
+        row["severity"] = _quake_severity(mag, bool(item.get("tsunami")))
+    elif layer == "alerts":
+        alert = str(item.get("alert") or "Green")
+        row["place"], row["detail"] = row["detail"], f"GDACS {alert.lower()} alert"
+        row["severity"] = {"red": "high", "orange": "medium"}.get(alert.lower(), "low")
+    elif layer == "space":
+        kp = _num(item.get("kp"))
+        if kp is None:
+            return None
+        row["id"] = f"space:kp:{item.get('time') or time_ms}"            # one row per reading
+        row["detail"], row["severity"] = "Planetary K-index", _kp_severity(kp)
+    elif layer == "spacealerts":
+        row["severity"] = _spacealert_severity(item)
+    elif layer == "markets":
+        change = _num(item.get("change_pct"))
+        if change is None or abs(change) < MARKET_MOVE_PCT:
+            return None
+        price = _num(item.get("price")) or 0.0
+        row["detail"] = f"{change:+.2f}% · {price:,.2f} {item.get('currency') or ''}".strip()
+        row["severity"] = "high" if abs(change) >= 5 else "medium" if abs(change) >= 3 else "low"
+    elif layer in {"news", "technews"}:
+        topic = str(item.get("topic") or "world")
+        row["kind"] = "news" if topic == "world" else topic                # news | tech | science
+    return row
+
+
+def _same_quake(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    if None in (a["lat"], a["lon"], b["lat"], b["lon"]):
+        return False
+    return abs(a["lat"] - b["lat"]) <= 1 and abs(a["lon"] - b["lon"]) <= 1 and abs(a["time_ms"] - b["time_ms"]) <= 30 * 60_000
+
+
+def intel_feed(snapshot: dict[str, Any], now: float | None = None, limit: int = 40) -> list[dict[str, Any]]:
+    """Merge a world snapshot into one newest-first feed of real events.
+
+    Rows: {id, time_ms, kind, title, detail, place, lat, lon, source, url, severity}; ids are
+    stable ("layer:source id") so the UI can animate new rows. Duplicates (same id, same link,
+    same headline, or a GDACS quake that USGS already reports) are dropped. Rows dated more than
+    a minute in the future are ignored."""
+    horizon = int(((now if now is not None else time.time()) + 60) * 1000)
+    rows: list[dict[str, Any]] = []
+    for layer in FEED_LAYERS:
+        state = snapshot.get(layer) or {}
+        for item in state.get("items") or []:
+            row = _feed_item(layer, item, str(state.get("source") or ""))
+            if row is not None and row["time_ms"] <= horizon:
+                rows.append(row)
+    quakes = [r for r in rows if r["id"].startswith("quakes:")]
+    seen_ids: set[str] = set()
+    seen_keys: set[str] = set()
+    out = []
+    for row in sorted(rows, key=lambda r: r["time_ms"], reverse=True):
+        if row["id"].startswith("alerts:") and row["kind"] == "quake":
+            twin = next((q for q in quakes if _same_quake(q, row)), None)
+            if twin is not None:            # USGS has it: keep that row, with GDACS's alert if higher
+                if SEVERITY_RANK[row["severity"]] > SEVERITY_RANK[twin["severity"]]:
+                    twin["severity"] = row["severity"]
+                continue
+        keys = []                           # headlines: one row per link and per wording
+        if row["kind"] in {"news", "tech", "science"}:
+            keys = [k for k in (row["url"], "t:" + re.sub(r"[^a-z0-9]+", " ", row["title"].lower()).strip()) if k]
+        if row["id"] in seen_ids or any(k in seen_keys for k in keys):
+            continue
+        seen_ids.add(row["id"])
+        seen_keys.update(keys)
+        out.append(row)
+    return out[:max(0, limit)]
+
+
+def intel_summary(feed: list[dict[str, Any]], updated_ms: int) -> dict[str, Any]:
+    """Counts by kind and by severity, the newest row's time and when the feed was rebuilt."""
+    counts: dict[str, int] = {}
+    severity = {"low": 0, "medium": 0, "high": 0}
+    for row in feed:
+        counts[row["kind"]] = counts.get(row["kind"], 0) + 1
+        severity[row["severity"]] = severity.get(row["severity"], 0) + 1
+    return {"total": len(feed), "counts": counts, "severity": severity,
+            "newest_ms": max((r["time_ms"] for r in feed), default=0), "updated_ms": int(updated_ms)}

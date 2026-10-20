@@ -9,7 +9,11 @@ Item {
     property string current: ""                 // "" = Home
     property var badges: ({})                   // key -> true when something waits there
     signal navigate(string key)
-    readonly property var items: [
+    readonly property bool app: typeof windowsApp !== "undefined" && windowsApp
+    readonly property var items: app
+        ? [["", "Home", "home"], ["atlas", "Intelligence", "brain"], ["game", "Game", "game"],
+           ["notes", "Memory", "memory"], ["system", "System", "chip"], ["settings", "Settings", "settings"]]
+        : [
         ["", "Home", "home"], ["files", "Files", "files"], ["apps", "Apps", "apps"],
         ["system", "System", "chip"], ["devices", "Devices", "device"], ["atlas", "Intelligence", "brain"],
         ["missions", "Automation", "gear"], ["notes", "Memory", "memory"], ["settings", "Settings", "settings"]

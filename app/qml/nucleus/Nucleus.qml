@@ -123,7 +123,8 @@ Item {
     // paused (another app has focus). One clock drives the whole core, so frames never double up.
     property int idlePace: 24
     property bool paused: false
-    readonly property bool fullRate: orbMode === "thinking" || answer.state === "streaming" || answer.state === "thinking"
+    property bool smooth: false                     // APVIS for Windows: the GPU draws the core, so run it at the display rate
+    readonly property bool fullRate: smooth || orbMode === "thinking" || answer.state === "streaming" || answer.state === "thinking"
         || (expanded > 0.01 && expanded < 0.99) || (globe > 0.01 && globe < 0.99) || (aperture > 0.01 && aperture < 0.99)
     readonly property bool gpuClock: root.activeRenderer === "sphere3d" || (root.orbStyle && root.vsync)
     // GPU tier, working: advance with the render loop (vsync-paced).
@@ -169,6 +170,28 @@ Item {
         scale: root.orbScale
         centreOpacity: 1 - root.aperture
         expanded: root.expanded
+    }
+    // APVIS 7's Neural Fabric (the "neural" look): a particle field; V7 advanced its phase ~22/s at rest.
+    property bool gaming: false
+    FabricCore {
+        anchors.fill: parent
+        visible: root.orbStyle && Theme.coreStyle === "fabric" && opacity > 0.01
+        opacity: 1 - root.globe
+        scale: root.orbScale
+        reducedMotion: root.reducedMotion
+        phase: root.time * (root.orbMode === "thinking" ? 56 : 22)
+        mode: root.orbMode === "thinking" || root.orbMode === "answering" ? "answer"
+            : root.orbMode === "attention" ? "mission" : root.gaming ? "gaming" : "standby"
+    }
+    JarvisCore {
+        anchors.fill: parent
+        visible: root.orbStyle && Theme.coreStyle === "jarvis" && opacity > 0.01
+        time: root.time
+        still: root.reducedMotion
+        mode: root.orbMode
+        opacity: 1 - root.globe
+        scale: root.orbScale
+        centreOpacity: 1 - root.aperture
     }
     InstrumentCore {
         anchors.fill: parent

@@ -115,11 +115,20 @@ class OllamaClient:
         with self._open("/api/generate", body, 180.0) as response:
             response.read()
 
-    def loaded(self) -> list[str]:
-        """Models Ollama holds in memory right now (/api/ps)."""
+    def running(self) -> list[dict[str, Any]]:
+        """Ollama's /api/ps entries (name, size, size_vram: the part on the GPU, ...)."""
         with self._open("/api/ps", None, self.timeout) as response:
             payload = json.load(response)
-        return [str(m.get("name") or m.get("model")) for m in payload.get("models", []) if m.get("name") or m.get("model")]
+        return [m for m in payload.get("models", []) if isinstance(m, dict)]
+
+    def loaded(self) -> list[str]:
+        """Models Ollama holds in memory right now (/api/ps)."""
+        return [str(m.get("name") or m.get("model")) for m in self.running() if m.get("name") or m.get("model")]
+
+    def unload(self, model: str) -> None:
+        """Free a loaded model's memory now (keep_alive 0, no prompt)."""
+        with self._open("/api/generate", {"model": model, "keep_alive": 0}, self.timeout) as response:
+            response.read()
 
     def embed(self, model: str, texts: list[str], *, keep_alive: str | int = KEEP_ALIVE,
               timeout: float | None = None) -> list[list[float]]:

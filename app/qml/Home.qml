@@ -24,6 +24,8 @@ Window {
     color: Theme.ink
     title: "APVIS"
 
+    // APVIS for Windows: an app layout (live feed, local AI, game) instead of the OS desktop pieces.
+    readonly property bool app: typeof windowsApp !== "undefined" && windowsApp
     readonly property color pale: Theme.text
     readonly property color muted: Theme.muted
     Binding { target: Theme; property: "accentName"; value: (shell.render || {}).accent || "apvis" }
@@ -154,7 +156,7 @@ Window {
     // Presentation privacy (V2-13): with a second screen attached, private context
     // (Focus, mission and note text, Memory/Missions pages) stays hidden until the
     // owner confirms the screens are theirs. Resets when the extra screen goes.
-    property bool trustedScreens: false
+    property bool trustedScreens: app
     readonly property int screenCount: Qt.application.screens.length
     readonly property bool sharedDisplay: (screenCount > 1 || previewPage === "shared") && !trustedScreens
     onScreenCountChanged: if (screenCount < 2) trustedScreens = false
@@ -185,8 +187,11 @@ Window {
     readonly property real rightW: Math.max(330, Math.min(460, width * 0.24))
     readonly property real rightX: width - rightW - 22
     readonly property real orbCX: (leftX + leftW + rightX) / 2
-    readonly property real orbCY: barH + (height - barH) * 0.41
-    readonly property real sphereD: Math.min(height * 0.36, (rightX - leftX - leftW) * 0.62)
+    readonly property real dockY: height - 22 - 52                  // APVIS for Windows: the Ask dock along the bottom
+    readonly property real statsY: dockY - 18 - 96
+    readonly property real orbCY: app ? (barH + 80 + statsY) / 2 : barH + (height - barH) * 0.41
+    readonly property real sphereD: app ? Math.min((statsY - barH - 100) * 0.66, (rightX - leftX - leftW) * 0.58)
+                                        : Math.min(height * 0.36, (rightX - leftX - leftW) * 0.62)
     readonly property real tilesTop: height * 0.785
     readonly property real gapW: rightX - leftX - leftW          // room between the card columns
     // While an answer is on screen the core grows to the middle and the cards
@@ -209,6 +214,7 @@ Window {
         anchors.fill: parent
         layer.enabled: root.lite
         Wallpaper { anchors.fill: parent; centre: Qt.point(root.orbCX / Math.max(1, root.width), root.orbCY / Math.max(1, root.height)) }
+        HudGrid { anchors.fill: parent; visible: root.app }      // APVIS for Windows: the blueprint grid of the JARVIS dashboards
     }
 
     // ------------------------------------------------------------ the core
@@ -219,6 +225,8 @@ Window {
         expanded: root.expand
         vsync: !(shell.render || {}).software
         idlePace: root.userIdle ? 12 : 24
+        smooth: root.app && !root.userIdle && !root.game.active   // not while a game wants the GPU
+        gaming: !!root.game.active
         paused: !root.active && !root.previewWindowed
         answerScale: root.answerScale
         x: root.coreCX - width / 2; y: root.coreCY - height / 2
@@ -265,7 +273,24 @@ Window {
         visible: opacity > 0.01
         Behavior on opacity { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
+        // APVIS for Windows: a greeting and the day at a glance instead of the brand block.
+        Column {
+            visible: root.app
+            x: root.leftX; y: root.barH + 34 - 30 * root.expand; spacing: 6
+            opacity: (homeLayer.shown ? 1 : 0) * (1 - root.expand)
+            Behavior on opacity { enabled: !root.answering && root.expand === 0; NumberAnimation { duration: 700 } }
+            readonly property int hour: root.nowTick.getHours()
+            readonly property var summary: (typeof shell.intelSummary !== "undefined" && shell.intelSummary) ? shell.intelSummary : ({})
+            readonly property int notable: ((summary.severity || {}).high || 0) + ((summary.severity || {}).medium || 0)
+            Text { text: parent.hour < 5 ? "Good night" : parent.hour < 12 ? "Good morning" : parent.hour < 18 ? "Good afternoon" : "Good evening"
+                   color: Theme.text; font.pixelSize: root.tall ? 38 : 32; font.weight: Font.Light }
+            Text { color: Theme.muted; font.pixelSize: 14
+                   text: [Qt.formatDateTime(root.nowTick, "dddd d MMMM"),
+                          parent.summary.total ? (parent.notable ? parent.notable + " notable reports" : "the world is quiet") : "",
+                          root.game.active ? "playing " + (root.game.name || "a game") : ""].filter(x => x).join("   ·   ") }
+        }
         BrandBlock {
+            visible: !root.app
             x: 34; y: root.barH + 18 - 30 * root.expand
             markSize: root.tall ? 104 : 78
             version: ((shell.updates || {}).installed || "").replace(/^0$/, "") || ""
@@ -275,18 +300,21 @@ Window {
 
         // Left column.
         Column {
-            x: root.leftX - (root.leftW + 80) * root.expand; y: root.barH + (root.tall ? 205 : 150); width: root.leftW; spacing: 16
+            x: root.leftX - (root.leftW + 80) * root.expand; y: root.barH + (root.app ? 140 : root.tall ? 205 : 150); width: root.leftW; spacing: 16
             opacity: 1 - root.expand; visible: opacity > 0.01
             StatusCard { width: parent.width; order: 1; shown: homeLayer.shown; onGo: key => root.act(key) }
-            DevicesCard { width: parent.width; order: 2; shown: homeLayer.shown; onGo: key => root.act(key) }
+            DevicesCard { width: parent.width; order: 2; shown: homeLayer.shown; visible: !root.app; onGo: key => root.act(key) }
+            AiCard { width: parent.width; order: 2; shown: homeLayer.shown; visible: root.app; onGo: key => root.act(key) }
+            TelemetryCard { width: parent.width; order: 3; shown: homeLayer.shown; visible: root.app; onGo: key => root.act(key) }
         }
         // Right column.
         Column {
-            x: root.rightX + (root.rightW + 60) * root.expand; y: root.barH + (root.tall ? 156 : 110); width: root.rightW; spacing: 16
+            x: root.rightX + (root.rightW + 60) * root.expand; y: root.barH + (root.app ? 140 : root.tall ? 156 : 110); width: root.rightW; spacing: 16
             opacity: 1 - root.expand; visible: opacity > 0.01
-            TaskCard { width: parent.width; order: 2; shown: homeLayer.shown; onGo: key => root.act(key) }
-            RouteCard { width: parent.width; order: 3; shown: homeLayer.shown; onGo: key => root.act(key) }
-            ActivityCard { width: parent.width; order: 4; shown: homeLayer.shown; visible: root.tall && !root.game.available; rows: 4; onGo: key => root.act(key) }
+            FeedCard { width: parent.width; order: 2; shown: homeLayer.shown; visible: root.app; rows: root.tall ? 6 : 4; onGo: key => root.act(key) }
+            TaskCard { width: parent.width; order: 2; shown: homeLayer.shown; visible: !root.app; onGo: key => root.act(key) }
+            RouteCard { width: parent.width; order: 3; shown: homeLayer.shown; visible: !root.app; onGo: key => root.act(key) }
+            ActivityCard { width: parent.width; order: 4; shown: homeLayer.shown; visible: root.tall && !root.game.available && !root.app; rows: 4; onGo: key => root.act(key) }
             GameCard { width: parent.width; order: 4; shown: homeLayer.shown; visible: !!root.game.available; g: root.game; onGo: key => root.act(key) }
             IntelCard { width: parent.width; order: 5; shown: homeLayer.shown; onGo: key => root.act(key) }
         }
@@ -294,9 +322,12 @@ Window {
         // Ask bar under the core.
         Item {
             id: askBar
-            width: Math.min(560, root.gapW - 60); height: 50
-            x: root.coreCX - width / 2
-            y: root.mix(Math.min(root.orbCY + root.sphereD * 0.66, root.tilesTop - height - 24), root.height - height - 26)
+            readonly property real dockW: root.rightX + root.rightW - root.leftX
+            width: root.app ? root.mix(dockW - appTiles.width - 16, Math.min(760, dockW)) : Math.min(560, root.gapW - 60)
+            height: root.app ? 52 : 50
+            x: root.app ? root.mix(root.leftX, root.coreCX - width / 2) : root.coreCX - width / 2
+            y: root.app ? root.mix(root.dockY, root.height - height - 26)
+                        : root.mix(Math.min(root.orbCY + root.sphereD * 0.66, root.tilesTop - height - 24), root.height - height - 26)
             Chamfer { anchors.fill: parent; cut: 25; fill: Theme.panel; fillOpacity: 0.85; fill2: Theme.bgBottom; fill2Opacity: 0.9
                       stroke: focusInput.activeFocus ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.7) : Theme.line
                       edgeGlow: focusInput.activeFocus }
@@ -337,18 +368,33 @@ Window {
         }
 
         ActionTiles {
-            x: root.orbCX - width / 2; y: root.tilesTop + 220 * root.expand
+            id: appTiles
+            x: root.app ? root.rightX + root.rightW - width : root.orbCX - width / 2
+            y: root.app ? root.dockY + 3 + 120 * root.expand : root.tilesTop + 220 * root.expand
             opacity: 1 - root.expand; visible: opacity > 0.01
-            tileWidth: root.tileW; tileHeight: root.tall ? 88 : 78
+            tileWidth: root.app ? (root.width >= 1600 ? 128 : 104) : root.tileW
+            tileHeight: root.app ? 46 : root.tall ? 88 : 78
             order: 4; shown: homeLayer.shown
+            app: root.app
             onChosen: key => {
                 if (key === "ask") focusInput.forceActiveFocus()
+                else if (key === "brief") shell.askQuestion("catch me up on the news")
+                else if (key === "web") { focusInput.text = "search the web for "; focusInput.forceActiveFocus() }
+                else if (key.startsWith("page:")) root.act(key)
                 else if (key === "search") root.openSearch()
                 else if (key === "create") shell.newNote()
                 else if (key === "automate") root.openPage("missions")
                 else if (key === "analyse") shell.askQuestion("analyse my computer")
                 else if (key === "more") root.openPage("apps")
             }
+        }
+        WorldStats {
+            visible: root.app && root.tall
+            x: root.leftX + root.leftW + 24; width: root.gapW - 48
+            y: root.statsY + 220 * root.expand
+            opacity: (1 - root.expand) * (homeLayer.shown ? 1 : 0)
+            Behavior on opacity { NumberAnimation { duration: 600 } }
+            onGo: key => root.act(key)
         }
         // Apps pinned from the Apps Store, under the tiles.
         PinnedDock {
@@ -362,7 +408,7 @@ Window {
             x: 20; width: Math.min(500, root.leftX + root.leftW - 20)
             height: root.tall ? 212 : 190
             y: root.height - height - 22 + (height + 40) * root.expand
-            visible: width >= 380 && root.tall && root.expand < 0.99      // below the Devices card only when there is room
+            visible: width >= 380 && root.tall && root.expand < 0.99 && !root.app      // below the Devices card only when there is room
             opacity: homeLayer.shown ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 800 } }
             onAction: key => key.startsWith("ask:") ? shell.askQuestion(key.slice(4)) : root.act(key)
@@ -433,7 +479,7 @@ Window {
     NavRail {
         id: nav
         x: 16; width: root.navW
-        y: root.pageOpen ? root.barH + 20 : root.barH + (root.tall ? 205 : 150)
+        y: root.pageOpen ? root.barH + 20 : root.barH + (root.app ? 140 : root.tall ? 205 : 150)
         Behavior on y { NumberAnimation { duration: 420; easing.type: Easing.OutCubic } }
         current: root.currentPage
         badges: ({ missions: root.activeMissions.length > 0, notes: (shell.inbox || []).length > 0,

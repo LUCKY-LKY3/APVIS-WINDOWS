@@ -30,6 +30,7 @@ from .vault import Vault, notes_context
 from .intelligence import CapabilityRequirement, DataSensitivity, DestinationPolicy, ProviderLocality, eligible_candidates
 from .ollama import DEFAULT_URL, InstalledModel, OllamaAdapter, OllamaClient, OllamaError, local_url
 from . import brain
+from . import gpu_ai
 from . import briefing, osint, websearch
 from . import scheduler as sched
 from .episodes import EpisodeStore
@@ -236,6 +237,7 @@ class AskConfig:
     def load(cls, path: Path | None = None) -> "AskConfig":
         path = path or _state_dir() / "config.json"
         config = cls()
+        config.roles = gpu_ai.default_roles()     # the desktop-GPU profile on Windows, the OptiPlex lists elsewhere
         for source in (Path("/etc/apvis-os/ask.json"), path):
             try:
                 data = json.loads(source.read_text(encoding="utf-8"))
@@ -244,7 +246,10 @@ class AskConfig:
             if not isinstance(data, dict):
                 raise ValueError(f"{source} must contain an object")
             config.ollama_url = data.get("ollama_url", config.ollama_url)
-            config.roles.update(data.get("roles", {}))
+            roles = data.get("roles", {})
+            if isinstance(roles, dict):         # save() writes every role: a built-in default list is no choice
+                roles = {role: models for role, models in roles.items() if not gpu_ai.is_builtin_default(role, models)}
+            config.roles.update(roles)
             config.destination_policy = data.get("destination_policy", config.destination_policy)
             for key in ("boost_url", "boost_enabled", "boost_mac", "api_enabled", "answer_length",
                         "semantic_memory", "embed_model", "episodes", "web_search"):
@@ -396,7 +401,8 @@ class AskService:
                  vault: Vault | None = None, cache: brain.AnswerCache | None = None,
                  boost: brain.BoostState | None = None, name: str | None = None,
                  scheduler: sched.ModelScheduler | None = None, web: websearch.WebSearch | None = None,
-                 news_fetch: Callable[[str], bytes] | None = None, episodes: EpisodeStore | None = None) -> None:
+                 news_fetch: Callable[[str], bytes] | None = None, episodes: EpisodeStore | None = None,
+                 guard: gpu_ai.GameGuard | None = None, gpu_profile: bool | None = None) -> None:
         self.config = config or AskConfig.load()
         self.client = client or OllamaClient(self.config.ollama_url)
         self.history = history or _state_dir() / "history.jsonl"
@@ -409,6 +415,17 @@ class AskService:
         self.web = web or websearch.WEB
         self.news_fetch = news_fetch
         self.episodes = episodes
+        self.guard = guard or gpu_ai.GUARD                # APVIS for Windows: a game running -> light mode
+        self.gpu_profile = gpu_ai.desktop_gpu() if gpu_profile is None else gpu_profile
+
+    def light(self) -> bool:
+        return self.guard.active
+
+    def local_plan(self, role: str, chosen: str | None, installed: list[InstalledModel], *,
+                   pinned: bool = False) -> gpu_ai.Decision:
+        """This computer's model and load settings for `role` (light mode while a game runs)."""
+        return gpu_ai.decide(role, chosen, installed, game_active=self.light(), gpu_profile=self.gpu_profile,
+                             vision=_vision_names(self.config.roles, installed), pinned=pinned)
 
     def note_search(self) -> Callable[..., list]:
         """Vault search for this question: hybrid (keywords + meaning) when meaning search is on and an
@@ -450,8 +467,8 @@ class AskService:
         except OllamaError:
             return None
         model = model or resolve_model("fast", self.config.roles, installed)
-        if not model:
-            return None
+        if not model or self.light():
+            return None                              # a game is running: nothing is loaded onto the GPU
         try:
             with self.scheduler.slot(sched.PLAN, "warm-up"):
                 return self._warm(model, installed)
@@ -568,7 +585,8 @@ class AskService:
         if not searchable:
             return result
         if web_note:                                  # the web was wanted but is off or found nothing
-            result.via = web_note if web_note == WEB_OFF else "the web search found nothing: " + web_note
+            note = web_note if web_note == WEB_OFF else "the web search found nothing: " + web_note
+            result.via = (result.via + " · " if result.via else "") + note
         elif (result.status == "completed" and self.config.web_search and result.source in ("local", "gaming-pc")
               and websearch.sounds_unsure(result.answer)):
             words = websearch.search_words(question, follow_up=bool(history))
@@ -628,16 +646,20 @@ class AskService:
         messages = [{"role": "system", "content": system}, *history, user]
         parts: list[str] = []
 
-        def stream(client: OllamaClient, chosen: str, where: str) -> None:
+        def stream(client: OllamaClient, chosen: str, where: str, plan: gpu_ai.Decision | None = None) -> None:
             # Hard privacy rule: only LOCAL candidates (this computer or the home network) under the configured policy.
             self._check_local(client, chosen, role)
             result.model, result.endpoint = chosen, client.url
             result.source = "gaming-pc" if where == "boost" else "local"
-            tokens = (brain.BOOST_ANSWER_TOKENS if where == "boost" else brain.ANSWER_TOKENS).get(role, 640)
+            # The graphics card writes fast enough for the gaming-PC budget (reasoning models need the room).
+            roomy = where == "boost" or (plan is not None and plan.roomy)
+            tokens = (brain.BOOST_ANSWER_TOKENS if roomy else brain.ANSWER_TOKENS).get(role, 640)
             tokens = int(tokens * LENGTH_TOKENS.get(self.config.answer_length, 1.0))
             stats: dict[str, Any] = {}
+            options = {**brain.load_options(where), **(plan.options if plan else {})}
+            keep = plan.keep_alive if plan is not None and plan.keep_alive is not None else brain.keep_alive(role, where)
             for text in client.chat_stream(chosen, messages, cancelled=cancelled, max_tokens=tokens, stats=stats,
-                                           options=brain.load_options(where), keep_alive=brain.keep_alive(role, where)):
+                                           options=options, keep_alive=keep):
                 if result.first_token_s is None:
                     result.first_token_s = round(self._clock() - start, 2)
                 parts.append(text)
@@ -671,7 +693,10 @@ class AskService:
                     result.status = "unavailable"
                     result.error = "no Ollama model is installed for Ask"
                     return self._record(result) if record else result
-                stream(self.client, chosen, "local")
+                plan = self.local_plan(role, chosen, installed, pinned=bool(model))
+                if plan.note:
+                    result.via = plan.note
+                stream(self.client, plan.model or chosen, "local", plan)
             result.answer = "".join(parts).strip()
             result.status = "cancelled" if cancelled() else "completed"
             if result.status == "completed" and not blocks and not history and model is None:
@@ -711,17 +736,23 @@ class AskService:
             targets.append((boost[0], boost[1], "boost"))
         targets.append((self.client, "", "local"))
         for client, chosen, where in targets:
+            plan: gpu_ai.Decision | None = None
             if where == "local":
-                chosen = resolve_model("fast", self.config.roles, self.client.models()) or ""
+                installed = self.client.models()
+                chosen = resolve_model("fast", self.config.roles, installed) or ""
                 if not chosen:
                     raise OllamaError("no Ollama model is installed for Ask")
+                plan = self.local_plan("fast", chosen, installed)
+                chosen = plan.model or chosen
             self._check_local(client, chosen, "fast")
             parts: list[str] = []
             stats: dict[str, Any] = {}
+            options = {**brain.load_options(where), **(plan.options if plan else {})}
+            keep = plan.keep_alive if plan is not None and plan.keep_alive is not None else brain.keep_alive("fast", where)
             try:
                 for text in client.chat_stream(chosen, messages, cancelled=cancelled, stats=stats, read_timeout=read_timeout,
                                                max_tokens=int(tokens * LENGTH_TOKENS.get(self.config.answer_length, 1.0)),
-                                               options=brain.load_options(where), keep_alive=brain.keep_alive("fast", where)):
+                                               options=options, keep_alive=keep):
                     if result.first_token_s is None:
                         result.first_token_s = round(self._clock() - start, 2)
                     parts.append(text)
@@ -734,6 +765,8 @@ class AskService:
             result.model, result.endpoint, result.provider = chosen, client.url, "ollama"
             if where == "boost":
                 result.via = (result.via + " · " if result.via else "") + "written on the gaming PC"
+            elif plan is not None and plan.note:
+                result.via = (result.via + " · " if result.via else "") + plan.note
             if stats.get("eval_count") and stats.get("eval_duration"):
                 result.tokens_per_s = round(stats["eval_count"] / (stats["eval_duration"] / 1e9), 1)
             return "".join(parts)
@@ -840,8 +873,8 @@ class AskService:
             installed = self.client.models()
         except OllamaError:
             return None, None
-        if classify(question) in ("fast", "chat"):
-            return None, None     # short everyday question: no extra model call before answering
+        if classify(question) in ("fast", "chat") or self.light():
+            return None, None     # short everyday question, or a game running: no extra model call before answering
         fast = resolve_model("fast", self.config.roles, installed)
         targets = {resolve_model(r, self.config.roles, installed) for r in ("fast", "code", "general")}
         if fast is None or len(targets) < 2:

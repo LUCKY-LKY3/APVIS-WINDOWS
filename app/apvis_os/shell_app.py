@@ -18,7 +18,7 @@ from uuid import uuid4
 from .ask import AskConfig, AskService, Conversation
 from .ollama import OllamaClient, OllamaError
 from .aviation import AIRPORTS, Area, AviationFeed, airspace_stats, cache_path as aviation_cache
-from .osint import OsintFeed
+from .osint import OsintFeed, intel_feed, intel_summary
 from .focus import FocusKind, FocusRecord, FocusStore
 from .home_status import net_rates, quick_status, route_status, slow_status
 from .telemetry import Telemetry
@@ -43,6 +43,7 @@ from .search import SearchIndex
 from .control import ControlCentre
 from . import windows as window_list
 from . import aisetup, appstore, backup, brain, devinfo, documents, health, hostinfo, lockscreen, miniterm, reminders, screen, semantic, updates, weather
+from . import gpu_ai
 from . import api as apvis_api
 from . import guest as guest_mode
 from .scheduler import SCHEDULER
@@ -88,7 +89,7 @@ APPLICATIONS: dict[str, tuple[str, ...]] = {
     "displays": ("/usr/bin/wdisplays",),
     "sound": ("/usr/bin/pavucontrol-qt",),
 }
-ACCENTS = ("lacquer", "apvis", "emerald", "cyan-steel", "aqua", "emerald-steel", "emerald-silver", "cool-white")
+ACCENTS = ("lacquer", "neural", "apvis", "emerald", "cyan-steel", "aqua", "emerald-steel", "emerald-silver", "cool-white")
 # V3 M3 design directions: only for development previews (APVIS_ACCENT=v3a|v3b, art from APVIS_CORE_ART,
 # fonts from APVIS_PREVIEW_FONTS); Settings never lists them and they are never saved.
 PREVIEW_ACCENTS = ("v3b",)
@@ -269,7 +270,8 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
         planePhotoChanged = Signal()
         _planePhotoUpdate = Signal("QVariantMap")   # an aircraft photo for the Atlas (worker thread)
         worldChanged = Signal()
-        _worldUpdate = Signal(str)
+        intelChanged = Signal()
+        _worldUpdate = Signal(str, object)   # snapshot JSON + the live intelligence feed rows (world thread)
         _askUpdate = Signal("QVariantMap")  # emitted from the Ask worker thread; delivered queued
         hostChanged = Signal()
         _hostUpdate = Signal("QVariantMap")
@@ -284,6 +286,7 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
         _windowsUpdate = Signal("QVariantList")   # open app windows, read off the UI thread
         gameChanged = Signal()
         _gameUpdate = Signal("QVariantMap")      # APVIS for Windows: the game card (from the apvis-game thread)
+        aiStatusChanged = Signal()
 
         def __init__(self) -> None:
             super().__init__()
@@ -367,6 +370,7 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
             self._system_page = False
             self._slow: dict[str, object] = {}
             self._route: dict[str, object] = {"reachable": False, "checking": True}
+            self._ai_status: dict[str, object] = gpu_ai.ai_status(self._route)
             self._systemUpdate.connect(self._apply_system)
             self._status_wake = threading.Event()
             self._stopping = False
@@ -384,7 +388,7 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
             # work in the model scheduler (V3 M2): only when the computer is quiet, never beside an answer.
             self._indexer = semantic.Indexer(
                 make_index=lambda: semantic.index_for(AskConfig.load()), vault=Vault,
-                busy=lambda: self._ask.get("state") in ("thinking", "streaming"),
+                busy=lambda: self._ask.get("state") in ("thinking", "streaming") or gpu_ai.GUARD.active,
                 on_status=lambda status: self._settingsUpdate.emit({"memory": self._memory_info(status=status)}),
                 scheduler=SCHEDULER)
             self._ai_queue: dict[str, object] = {}
@@ -437,6 +441,8 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
             self._windows: list[dict[str, str]] = []
             self._windowsUpdate.connect(self._apply_windows)
             self._world_json = "{}"
+            self._intel_feed: list[dict[str, object]] = []
+            self._intel_summary: dict[str, object] = intel_summary([], 0)
             self._worldUpdate.connect(self._apply_world)
             self._atlas_area: Area | None = None      # set by the Atlas view; None = the default UK area
             self._area_changed = False
@@ -594,8 +600,23 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
 
         @Slot("QVariantMap")
         def _apply_game(self, update: dict[str, object]) -> None:
+            was = bool(self._game.get("active")), self._game.get("name")
             self._game = update
             self.gameChanged.emit()
+            if (bool(update.get("active")), update.get("name")) != was:
+                self._refresh_ai_status()
+
+        @Property("QVariantMap", notify=aiStatusChanged)
+        def aiStatus(self) -> dict[str, object]:
+            """{model, mode: gpu|cpu|light|off, reason, profile}: what answers questions right now (gpu_ai.py)."""
+            return self._ai_status
+
+        def _refresh_ai_status(self) -> None:
+            """From the route check and the game card already in hand: no Ollama call, no timer."""
+            status = gpu_ai.ai_status(self._route, game=self._game)
+            if status != self._ai_status:
+                self._ai_status = status
+                self.aiStatusChanged.emit()
 
         def _game_loop(self) -> None:
             """The game card: which game is playing and its stats, every 2 s (gamelink.py)."""
@@ -604,12 +625,28 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
             try:
                 while not self._game_stop.is_set():
                     try:
-                        self._gameUpdate.emit(link.sample())
+                        sample = link.sample()
+                        self._gameUpdate.emit(sample)
+                        # The gaming guard: Ask goes light while a game runs; its start frees the graphics card.
+                        if gpu_ai.GUARD.update(bool(sample.get("active")), str(sample.get("name") or "")) == "started":
+                            self._free_gpu()
                     except Exception as exc:  # keep sampling; one bad read must not end the card
                         print(f"apvis-game: {exc}", file=sys.stderr)
                     self._game_stop.wait(2.0)
             finally:
+                gpu_ai.GUARD.update(False)
                 link.close()
+
+        @staticmethod
+        def _free_gpu() -> None:
+            """A game started: unload what Ollama holds on the GPU (on the game thread, a few short requests)."""
+            try:
+                gone = gpu_ai.unload_resident(OllamaClient(AskConfig.load().ollama_url, timeout=2))
+            except (OSError, ValueError) as exc:
+                print(f"apvis-game: could not free the GPU: {exc}", file=sys.stderr)
+                return
+            if gone:
+                print(f"apvis-game: a game started, unloaded {', '.join(gone)}", file=sys.stderr)
 
         @Property("QVariantMap", notify=systemChanged)
         def system(self) -> dict[str, object]:
@@ -644,6 +681,7 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
                 self._slow = update["slow"]
             if update.get("route"):
                 self._route = update["route"]
+                self._refresh_ai_status()
             self.systemChanged.emit()
 
         def _status_loop(self) -> None:
@@ -1193,8 +1231,8 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
         def _warm_if_needed(self, route: dict[str, object]) -> None:
             """Keep the fast model loaded with Ask's own settings and its system prompt cached
             (after a restart of Ollama, or the first time it is seen)."""
-            if getattr(self, "_warming", False):
-                return
+            if getattr(self, "_warming", False) or gpu_ai.GUARD.active:
+                return                     # a game is running: nothing is loaded onto the graphics card
             model = str(route["model"])
             try:
                 loaded = OllamaClient(str(route["endpoint"]), timeout=2).loaded()
@@ -1691,8 +1729,13 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
 
             def world() -> None:
                 osint = OsintFeed()
+
+                def push() -> None:          # the feed is built here, off the GUI thread, only when a layer changed
+                    snap = osint.snapshot()
+                    self._worldUpdate.emit(json.dumps(snap), intel_feed(snap))
+
                 while (self._atlas_visible or self._home_intel) and not self._stopping:
-                    osint.poll(lambda: self._worldUpdate.emit(json.dumps(osint.snapshot())))
+                    osint.poll(push)
                     self._world_wake.wait(5.0)
                     self._world_wake.clear()
 
@@ -1946,10 +1989,24 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
             """World OSINT layers as one JSON string (see apvis_os.osint)."""
             return self._world_json
 
-        @Slot(str)
-        def _apply_world(self, data: str) -> None:
+        @Property("QVariantList", notify=intelChanged)
+        def intelFeed(self) -> list[dict[str, object]]:
+            """Live intelligence feed, newest first (see apvis_os.osint.intel_feed)."""
+            return self._intel_feed
+
+        @Property("QVariantMap", notify=intelChanged)
+        def intelSummary(self) -> dict[str, object]:
+            """{total, counts by kind, severity counts, newest_ms, updated_ms} for the feed."""
+            return self._intel_summary
+
+        @Slot(str, object)
+        def _apply_world(self, data: str, feed: list[dict[str, object]]) -> None:
             self._world_json = data
             self.worldChanged.emit()
+            if feed != self._intel_feed:          # the ISS moving every 10 s does not touch the feed
+                self._intel_feed = feed
+                self._intel_summary = intel_summary(feed, int(time.time() * 1000))
+                self.intelChanged.emit()
 
         @Slot(float, float)
         def setAtlasArea(self, lat: float, lon: float) -> None:
@@ -2545,6 +2602,9 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
     # APVIS for Windows (desktop app): full screen on its own monitor instead of being the desktop itself.
     desktop_app = not windowed and (sys.platform == "win32" or os.environ.get("APVIS_DESKTOP_APP") == "1")
     engine.rootContext().setContextProperty("desktopApp", desktop_app)
+    # The Windows app's own layout (no Linux menus, devices, terminal); APVIS_DESKTOP_APP=1/0 forces it for renders.
+    windows_app = os.environ.get("APVIS_DESKTOP_APP") == "1" or (sys.platform == "win32" and os.environ.get("APVIS_DESKTOP_APP") != "0")
+    engine.rootContext().setContextProperty("windowsApp", windows_app)
     engine.load(QUrl.fromLocalFile(str(qml_path.resolve())))
     if not engine.rootObjects():
         return 2
