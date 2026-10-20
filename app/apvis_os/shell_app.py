@@ -19,6 +19,7 @@ from .ask import AskConfig, AskService, Conversation
 from .ollama import OllamaClient, OllamaError
 from .aviation import AIRPORTS, Area, AviationFeed, airspace_stats, cache_path as aviation_cache
 from .osint import OsintFeed, intel_feed, intel_summary
+from .satellites import SatelliteCatalog
 from .focus import FocusKind, FocusRecord, FocusStore
 from .home_status import net_rates, quick_status, route_status, slow_status
 from .telemetry import Telemetry
@@ -441,6 +442,7 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
             self._windows: list[dict[str, str]] = []
             self._windowsUpdate.connect(self._apply_windows)
             self._world_json = "{}"
+            self._satellites = SatelliteCatalog()     # filled and propagated on the world thread
             self._intel_feed: list[dict[str, object]] = []
             self._intel_summary: dict[str, object] = intel_summary([], 0)
             self._worldUpdate.connect(self._apply_world)
@@ -1728,11 +1730,11 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
                 return
 
             def world() -> None:
-                osint = OsintFeed()
+                osint = OsintFeed(satellites=self._satellites)
 
                 def push() -> None:          # the feed is built here, off the GUI thread, only when a layer changed
                     snap = osint.snapshot()
-                    self._worldUpdate.emit(json.dumps(snap), intel_feed(snap))
+                    self._worldUpdate.emit(json.dumps(snap, separators=(",", ":")), intel_feed(snap))
 
                 while (self._atlas_visible or self._home_intel) and not self._stopping:
                     osint.poll(push)
@@ -1998,6 +2000,23 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
         def intelSummary(self) -> dict[str, object]:
             """{total, counts by kind, severity counts, newest_ms, updated_ms} for the feed."""
             return self._intel_summary
+
+        @Slot(int, result="QVariantMap")
+        def satelliteInfo(self, norad: int) -> dict[str, object]:
+            """Click card for one satellite: {name, kind, norad, altKm, orbit, periodMin, speedKms,
+            lat, lon, inclination}; {} when it is not in the catalog."""
+            try:
+                return self._satellites.info(norad)
+            except (ValueError, ZeroDivisionError, OverflowError):
+                return {}
+
+        @Slot(int, result="QVariantList")
+        def satelliteTrack(self, norad: int) -> list[list[float]]:
+            """One orbit of ground track from now: [[lat, lon, altKm], ...] (90 points)."""
+            try:
+                return self._satellites.track(norad)
+            except (ValueError, ZeroDivisionError, OverflowError):
+                return []
 
         @Slot(str, object)
         def _apply_world(self, data: str, feed: list[dict[str, object]]) -> None:

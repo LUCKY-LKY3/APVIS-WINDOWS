@@ -188,7 +188,7 @@ Window {
     readonly property real rightX: width - rightW - 22
     readonly property real orbCX: (leftX + leftW + rightX) / 2
     readonly property real dockY: height - 22 - 52                  // APVIS for Windows: the Ask dock along the bottom
-    readonly property real statsY: dockY - 18 - 96
+    readonly property real statsY: dockY - 18                  // the core's room ends above the dock
     readonly property real orbCY: app ? (barH + 80 + statsY) / 2 : barH + (height - barH) * 0.41
     readonly property real sphereD: app ? Math.min((statsY - barH - 100) * 0.66, (rightX - leftX - leftW) * 0.58)
                                         : Math.min(height * 0.36, (rightX - leftX - leftW) * 0.62)
@@ -387,14 +387,6 @@ Window {
                 else if (key === "analyse") shell.askQuestion("analyse my computer")
                 else if (key === "more") root.openPage("apps")
             }
-        }
-        WorldStats {
-            visible: root.app && root.tall
-            x: root.leftX + root.leftW + 24; width: root.gapW - 48
-            y: root.statsY + 220 * root.expand
-            opacity: (1 - root.expand) * (homeLayer.shown ? 1 : 0)
-            Behavior on opacity { NumberAnimation { duration: 600 } }
-            onGo: key => root.act(key)
         }
         // Apps pinned from the Apps Store, under the tiles.
         PinnedDock {

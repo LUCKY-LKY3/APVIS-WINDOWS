@@ -165,6 +165,9 @@ QtObject {
     readonly property color bandHigh: pick("bandHigh", "#b8f0d8")
     readonly property color kpCalm: pick("kpCalm", "#9fb8ff")
     readonly property color nightLayer: pick("nightLayer", "#8fa8ff")
+    // Satellites on the Intelligence globe, by kind (after OSIRIS: navigation green, comms/geo cyan, debris red).
+    readonly property var satColours: ({ station: text, bright: "#9fd8ff", navigation: "#35e69a", geo: "#38d6ff",
+                                         weather: "#ffd166", science: "#b48cff", starlink: "#2e91ff", debris: "#ff5a5a", other: "#5f86b8" })
     readonly property var eventColours: pick("eventColours", { fire: "#ff8a4c", storm: "#5ad1e6", cyclone: "#5ad1e6", volcano: "#e46a5f", ice: "#dfe8ee",
                                            flood: "#6c9cff", drought: "#d9b36a", quake: "#f0b36a", dust: "#c9b08a", iss: "#eef2f4", camera: "#9fd8ff" })
     // Atlas markets panel.

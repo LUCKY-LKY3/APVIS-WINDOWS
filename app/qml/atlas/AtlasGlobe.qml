@@ -14,6 +14,9 @@ Item {
     property string bordersJson: "{}"     // world-borders.json: lines [lon, lat, ...]
     property var feeds: ({})              // { quakes: [...], alerts: [...], events: [...], iss: [...] } (already filtered by layer)
     property var issTrail: []
+    property var satTrack: []             // [[lat, lon, alt], ...] one orbit of the chosen satellite
+    // Satellite colours by kind (OSIRIS-style: navigation green, comms/geo cyan, debris red).
+    readonly property var satColours: Theme.satColours
     property var selected: null           // { kind, id }
     property bool night: true
     property bool still: false
@@ -298,6 +301,31 @@ Item {
                 g.addColorStop(0, globe.rgba(col, al)); g.addColorStop(1, globe.rgba(col, 0)); c.fillStyle = g; c.fillRect(x - r, y - r, 2 * r, 2 * r) }
             const ring = (x, y, r) => { c.strokeStyle = globe.rgba(Theme.text, 1); c.lineWidth = 1.4; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.stroke() }
             const f = globe.feeds || {}
+            // Satellites (after OSIRIS): each at a height that grows with its real altitude on a log scale, so low
+            // orbits hug the globe and the geostationary belt makes a ring; hidden where the globe is in front.
+            const sats = f.satellites || []
+            if (sats.length) {
+                const ka = globe.lon0 * Math.PI / 180, kp = globe.lat0 * Math.PI / 180
+                const cka = Math.cos(ka), ska = Math.sin(ka), ckp = Math.cos(kp), skp = Math.sin(kp)
+                const tone = {}
+                for (const k in globe.satColours) tone[k] = globe.rgba(Qt.color(globe.satColours[k]), 0.85)
+                const dim = globe.rgba(Qt.color(globe.satColours.other), 0.6)
+                for (const sat of sats) {
+                    const la = sat.lat * Math.PI / 180, lo = sat.lon * Math.PI / 180
+                    const h = 1 + 0.035 * Math.log2(1 + Math.max(0, sat.alt || 0) / 200)
+                    const x = Math.cos(la) * Math.sin(lo) * h, y = Math.sin(la) * h, z = Math.cos(la) * Math.cos(lo) * h
+                    const x1 = x * cka - z * ska, z1 = z * cka + x * ska
+                    const y2 = y * ckp - z1 * skp, z2 = y * skp + z1 * ckp
+                    if (z2 < 0 && x1 * x1 + y2 * y2 < 1) continue          // behind the globe
+                    const sx = globe.cx + R * x1, sy = globe.cy - R * y2
+                    const k = sat.k || sat.kind || "other"
+                    c.fillStyle = tone[k] || dim
+                    const big = k === "station" || k === "bright"
+                    c.fillRect(sx - (big ? 1.5 : 1), sy - (big ? 1.5 : 1), big ? 3 : 2, big ? 3 : 2)
+                    hits.push([sx, sy, "satellites", sat])
+                    if (sel && sel.kind === "satellites" && sel.id === sat.id) ring(sx, sy, 9)
+                }
+            }
             for (const i of (f.events || [])) {
                 const q = globe.project(i.lat, i.lon); if (q[2] <= 0) continue
                 const col = Qt.color(i.kind === "fire" ? Theme.eventColours.fire : i.kind === "storm" ? Theme.eventColours.storm : i.kind === "volcano" ? Theme.eventColours.volcano : Theme.muted)
@@ -324,6 +352,21 @@ Item {
                         c.strokeStyle = globe.rgba(col, 0.7 * (1 - t)); c.lineWidth = 1.3; c.beginPath(); c.arc(q[0], q[1], r + t * 20, 0, Math.PI * 2); c.stroke() }
                 hits.push([q[0], q[1], "quakes", i])
                 if (sel && sel.kind === "quakes" && sel.id === i.id) ring(q[0], q[1], r + 8)
+            }
+            // The chosen satellite's orbit (one period).
+            if (globe.satTrack.length > 1) {
+                c.strokeStyle = globe.rgba(Qt.color(globe.satColours.geo), 0.7); c.lineWidth = 1.2
+                c.beginPath()
+                let pen = false
+                for (const pt of globe.satTrack) {
+                    const la = pt[0] * Math.PI / 180, lo = pt[1] * Math.PI / 180
+                    const h = 1 + 0.035 * Math.log2(1 + Math.max(0, pt[2] || 0) / 200)
+                    const q = globe.projectUnit(Math.cos(la) * Math.sin(lo) * h, Math.sin(la) * h, Math.cos(la) * Math.cos(lo) * h)
+                    const ux = (q[0] - globe.cx) / R, uy = (q[1] - globe.cy) / R
+                    if (q[2] < 0 && ux * ux + uy * uy < 1) { pen = false; continue }
+                    pen ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]); pen = true
+                }
+                c.stroke()
             }
             // ISS: its recent track and the station.
             const t = globe.issTrail

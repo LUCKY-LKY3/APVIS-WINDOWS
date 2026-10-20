@@ -64,7 +64,8 @@ float specks(vec3 n, float k, float t, float seed)
         vec3 at = floor(q - float(i) * 0.5) + float(i) * 0.5 + 0.2 + 0.6 * h;
         float d = length(q - at);
         float tw = 0.55 + 0.45 * sin(t * (0.8 + 2.4 * h.x) + h.y * 40.0);
-        b += smoothstep(0.40, 0.0, d) * tw * (0.6 + h.z);
+        // a crisp point with a faint halo, so each particle reads on its own (owner: "more defined")
+        b += (smoothstep(0.24, 0.11, d) * 2.3 + smoothstep(0.42, 0.0, d) * 0.25) * tw * (0.6 + h.z);
     }
     return b;
 }
@@ -80,7 +81,7 @@ vec3 shell(vec2 p, float sr, float k, float yaw, float tilt, float seed, float t
     float f = specks(spin(vec3(p / sr, z), yaw, tilt), k, t, seed);
     float b = specks(spin(vec3(p / sr, -z), yaw, tilt), k, t, seed);
     float edge = 0.7 + 0.6 * pow(rr, 3.0);            // denser-looking toward the rim, like a real ball of points
-    return (tint * (f + 0.55 * b) + hi * f * f * 0.35) * edge;
+    return (tint * (f + 0.35 * b) + hi * f * f * 0.45) * edge;
 }
 
 void MAIN()
@@ -90,21 +91,19 @@ void MAIN()
     float t = uTime;
     float e = uEnergy;
     // darker and bluer than the references so it sits in the dark dashboard (owner, 2026-10-20)
-    vec3 tint = mix(uTint.rgb, vec3(0.12, 0.62, 1.0), 0.35) * 0.62;
-    vec3 hi = mix(uHi.rgb, vec3(0.6, 0.85, 1.0), 0.4) * 0.6;
+    vec3 tint = mix(uTint.rgb, vec3(0.12, 0.62, 1.0), 0.35) * 0.85;
+    vec3 hi = mix(uHi.rgb, vec3(0.6, 0.85, 1.0), 0.4) * 0.8;
     float s = 0.53 * (1.0 + 0.03 * e * sin(t * 3.0));
     float yaw = t * (0.10 + 0.45 * e);
     vec3 col = vec3(0.0);
 
     // a faint glow inside the cloud
-    col += tint * 0.05 * smoothstep(s * 1.02, 0.0, r);
+    col += tint * 0.03 * smoothstep(s * 1.02, 0.0, r);
     // nested shells give the cloud its depth; the outer two are sparse and make the ragged edge
-    col += shell(p, s * 1.06, 30.0, yaw * 0.8, 0.30, 11.0, t, tint, hi) * 0.55;
-    col += shell(p, s * 1.00, 34.0, yaw, 0.35, 1.0, t, tint, hi) * 1.25;
-    col += shell(p, s * 0.93, 32.0, -yaw * 1.2, -0.4, 3.0, t, tint, hi) * 0.95;
-    col += shell(p, s * 0.84, 28.0, yaw * 1.4, 0.6, 5.0, t, tint, hi) * 0.75;
-    col += shell(p, s * 0.70, 24.0, -yaw * 0.9, -0.2, 7.0, t, tint, hi) * 0.55;
-    col += shell(p, s * 0.52, 20.0, yaw * 1.7, 0.9, 9.0, t, tint, hi) * 0.4;
+    col += shell(p, s * 1.05, 26.0, yaw * 0.8, 0.30, 11.0, t, tint, hi) * 0.6;
+    col += shell(p, s * 1.00, 30.0, yaw, 0.35, 1.0, t, tint, hi) * 1.2;
+    col += shell(p, s * 0.88, 26.0, -yaw * 1.2, -0.4, 3.0, t, tint, hi) * 0.8;
+    col += shell(p, s * 0.68, 20.0, yaw * 1.4, 0.6, 5.0, t, tint, hi) * 0.5;
     col *= 1.0 + 0.6 * e;
 
     // ---- the HUD frame: thin rings, fine ticks, four cardinal marks and a turning arc

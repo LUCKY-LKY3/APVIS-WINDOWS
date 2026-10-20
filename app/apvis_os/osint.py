@@ -13,6 +13,9 @@ alerts, watches and warnings, and tech + science news (BBC Technology and BBC
 Science, also reused by Ask's news catch-up in briefing.py). Only official public
 feeds: no private or unsecured cameras.
 
+An optional `satellites` layer (apvis_os.satellites: CelesTrak GP elements,
+propagated locally) is recomputed every ~10 s; it is not part of the feed.
+
 intel_feed() merges a snapshot into one newest-first live intelligence feed.
 """
 from __future__ import annotations
@@ -28,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .common import utc_now
+from .satellites import UPDATE_S as SAT_UPDATE_S, SatelliteCatalog
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) APVIS-OS/2.0 (+owner desktop OSIRIS world atlas)"
 Fetch = Callable[[str], bytes]
@@ -382,20 +386,33 @@ class LayerState:
 
 
 class OsintFeed:
-    def __init__(self, fetch: Fetch = _fetch, monotonic: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, fetch: Fetch = _fetch, monotonic: Callable[[], float] = time.monotonic,
+                 satellites: SatelliteCatalog | None = None) -> None:
         self._fetch, self._now = fetch, monotonic
         self.states = {layer.key: LayerState() for layer in LAYERS}
+        self.satellites = satellites          # optional `satellites` layer (CelesTrak, propagated here)
+        self._sat_due = 0.0
 
     def poll(self, on_change: Callable[[], None] | None = None) -> bool:
         """Fetch every layer that is due; True if anything changed.
 
-        on_change runs after each layer that changed, so a slow source (GDELT)
-        never holds back the layers that already answered."""
-        changed = False
+        on_change runs for the changes so far before each network fetch and once
+        at the end, so a slow source (GDELT) never holds back the layers that
+        already answered, while the quick ones (the ISS, satellite positions)
+        share one update per poll."""
+        changed = pending = False
+
+        def flush() -> None:
+            nonlocal pending
+            if pending and on_change is not None:
+                on_change()
+            pending = False
+
         for layer in LAYERS:
             state = self.states[layer.key]
             if self._now() < state.next_due:
                 continue
+            flush()
             state.next_due = self._now() + layer.every_s
             try:
                 state.items = (layer.custom(self._fetch) if layer.custom
@@ -407,9 +424,18 @@ class OsintFeed:
                 state.error = (f"{layer.source} could not be reached" if isinstance(exc, OSError)
                                else f"{layer.source} sent data APVIS could not read")
                 state.next_due = self._now() + min(layer.every_s, 120)
-            changed = True
-            if on_change is not None:
-                on_change()
+            changed = pending = True
+        sats = self.satellites
+        if sats is not None and (changed or self._now() >= self._sat_due):
+            if sats.due_groups():             # elements at most every 6 h per group (cached on disk)
+                flush()
+                sats.refresh(self._fetch)
+            elif not sats.orbits:
+                sats.refresh(self._fetch)     # first poll: the cached elements
+            sats.compute()                    # positions ride along with any other change
+            self._sat_due = self._now() + SAT_UPDATE_S
+            changed = pending = True
+        flush()
         return changed
 
     def snapshot(self) -> dict[str, Any]:
@@ -420,6 +446,8 @@ class OsintFeed:
             out[layer.key] = {"name": layer.name, "source": layer.source, "licence": layer.licence,
                               "status": state.status, "fetched_at": state.fetched_at, "age_s": age,
                               "error": state.error, "items": state.items}
+        if self.satellites is not None:
+            out["satellites"] = self.satellites.snapshot()
         return out
 
 

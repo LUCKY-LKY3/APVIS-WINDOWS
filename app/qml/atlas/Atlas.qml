@@ -29,12 +29,12 @@ Item {
     readonly property bool live: info.status === "live"
 
     // ---- layers
-    property var layersOn: ({ flights: true, quakes: true, events: true, alerts: true, iss: true, cameras: true, night: true })
+    property var layersOn: ({ flights: true, quakes: true, events: true, alerts: true, iss: true, satellites: true, cameras: true, night: true })
     // "globe": the whole world at a glance (default); "map": the detailed, zoomable map.
     property string mode: "globe"
     property bool sideOpen: true             // the floating intel panel (INTEL button hides it)
     readonly property int entities: ["quakes", "events", "alerts", "cameras", "news"].reduce((n, k) => n + (feed(k).items || []).length, 0)
-                                    + (flightsVisible ? planes.length : 0) + (feed("iss").items || []).length
+                                    + (flightsVisible ? planes.length : 0) + (feed("iss").items || []).length + (feed("satellites").items || []).length
     readonly property int layersActive: Object.keys(layersOn).filter(k => layersOn[k] !== false).length
     function toggle(key) { const o = Object.assign({}, layersOn); o[key] = !o[key]; layersOn = o }
     function feed(key) { return (world[key] || {}) }
@@ -120,13 +120,30 @@ Item {
     readonly property var selectedPlane: selected && selected.kind === "plane" ? planes.find(p => p[0] === selected.hex) || null : null
     readonly property var selectedItem: {
         if (!selected || selected.kind === "plane") return null
-        return (feed(selected.kind).items || []).find(i => i.id === selected.id) || null
+        const found = (feed(selected.kind).items || []).find(i => i.id === selected.id) || null
+        if (found && selected.kind === "satellites") return satDetail(found)
+        return found
     }
     onSelectedChanged: {
         if (!selected || selected.kind !== "plane" || selected.hex !== followHex) followHex = ""
+        if (selected && selected.kind === "satellites" && typeof shell.satelliteInfo === "function") {
+            satInfo = shell.satelliteInfo(selected.id) || ({})
+            globeView.satTrack = typeof shell.satelliteTrack === "function" ? shell.satelliteTrack(selected.id) || [] : []
+        } else globeView.satTrack = []
         overlay.requestPaint()
     }
 
+    // A satellite's details card (after OSIRIS): the bridge computes them on click; the compact globe row is the fallback.
+    property var satInfo: ({})
+    function satDetail(row) {
+        const d = satInfo.norad === row.id ? satInfo : ({})
+        const alt = d.altKm !== undefined ? d.altKm : row.alt
+        return { id: row.id, lat: d.lat !== undefined ? d.lat : row.lat, lon: d.lon !== undefined ? d.lon : row.lon, kind: "satellite",
+                 title: d.name || row.n || row.name || ("NORAD " + row.id),
+                 detail: [Theme.label(d.kind || row.k || ""), d.orbit || "", alt !== undefined ? Math.round(alt) + " km up" : "",
+                          d.periodMin ? Math.round(d.periodMin) + " min orbit" : "", d.speedKms ? d.speedKms.toFixed(2) + " km/s" : "",
+                          d.inclination !== undefined ? d.inclination.toFixed(1) + "° inclination" : "", "NORAD " + row.id].filter(x => x).join("  ·  ") }
+    }
     property string filterText: ""
     function passes(p) {
         if (!filterText) return true
@@ -296,7 +313,8 @@ Item {
         opacity: atlas.reveal
         Repeater {
             model: [["flights", "✈", "Flights", Theme.accent], ["quakes", "◉", "Earthquakes", Theme.warm], ["events", "▲", "Natural events", Theme.fire],
-                    ["alerts", "◎", "Disasters", Theme.critical], ["iss", "✦", "ISS", Theme.text], ["cameras", "▣", "Cameras", Theme.eventColours.camera],
+                    ["alerts", "◎", "Disasters", Theme.critical], ["iss", "✦", "ISS", Theme.text], ["satellites", "⋰", "Satellites", Theme.satColours.geo],
+                    ["cameras", "▣", "Cameras", Theme.eventColours.camera],
                     ["night", "◐", "Day / night", Theme.nightLayer]]
             delegate: AbstractButton {
                 id: chip
@@ -409,7 +427,8 @@ Item {
             dots: atlas.dots
             landJson: atlas.landJson
             bordersJson: shell.worldBorders
-            feeds: ({ quakes: atlas.items("quakes"), alerts: atlas.items("alerts"), events: atlas.items("events"), iss: atlas.items("iss") })
+            feeds: ({ quakes: atlas.items("quakes"), alerts: atlas.items("alerts"), events: atlas.items("events"), iss: atlas.items("iss"),
+                      satellites: atlas.items("satellites") })
             issTrail: atlas.layersOn.iss ? atlas.issTrail : []
             selected: atlas.selected
             night: atlas.layersOn.night !== false
