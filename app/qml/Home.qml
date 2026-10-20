@@ -57,6 +57,20 @@ Window {
     property bool devOpen: previewPage === "dev"
     property bool systemOpen: previewPage === "system"
     property bool devicesOpen: previewPage === "devices"
+    property bool gameOpen: previewPage.startsWith("game")
+    // Game mode (APVIS for Windows): live game data, or a fixture for renders ("game-live").
+    readonly property var game: previewPage === "game-live" || previewPage === "home-game"
+        ? ({ available: true, active: true, name: "Cyberpunk 2077", exe: "Cyberpunk2077.exe", since_ms: Date.now() - 4380000,
+             cpu: 46, ram: 61, procCpu: 31, procRamMb: 9420, fps: null,
+             gpu: { name: "NVIDIA GeForce GTX 1080 Ti", util: 97, temp: 74, vramUsed: 8920, vramTotal: 11264, power: 241, clock: 1885, fan: 58 },
+             history: { cpu: [38, 41, 44, 47, 45, 43, 46, 49, 46, 44, 45, 47, 46],
+                        gpu: [91, 94, 96, 97, 98, 97, 95, 97, 98, 97, 96, 97, 97],
+                        gpuTemp: [66, 68, 69, 70, 71, 72, 72, 73, 73, 74, 74, 74, 74] },
+             today: [{ name: "Cyberpunk 2077", seconds: 4380 }, { name: "Rocket League", seconds: 2700 }],
+             recent: [{ name: "Cyberpunk 2077", lastPlayedMs: Date.now(), totalSeconds: 151200 },
+                      { name: "Rocket League", lastPlayedMs: Date.now() - 7200000, totalSeconds: 98400 },
+                      { name: "Elden Ring", lastPlayedMs: Date.now() - 259200000, totalSeconds: 412000 }] })
+        : (typeof shell.game !== "undefined" && shell.game) ? shell.game : ({})
     property bool appsOpen: previewPage === "apps" || previewPage.startsWith("apps:")
     // Booted with "Install APVIS OS" from the USB menu: open the installer.
     property bool installOpen: previewPage === "install" || !!(shell.installer || {}).requested
@@ -71,10 +85,10 @@ Window {
     Timer { running: previewPage === "windows"; interval: 300; onTriggered: topBar.openMenu = "Windows" }
     // Smoke-test hook: "search:<text>" opens search with that text.
     Timer { running: previewPage.startsWith("search:"); interval: 600; onTriggered: { root.openSearch(); searchField.text = previewPage.slice(7) } }
-    readonly property bool pageOpen: settingsOpen || missionsOpen || atlasOpen || notesOpen || devOpen || installOpen || systemOpen || devicesOpen || appsOpen
+    readonly property bool pageOpen: settingsOpen || missionsOpen || atlasOpen || notesOpen || devOpen || installOpen || systemOpen || devicesOpen || appsOpen || gameOpen
     onPageOpenChanged: shell.setHomeIntel(!pageOpen)
     readonly property string currentPage: settingsOpen ? "settings" : missionsOpen ? "missions" : atlasOpen ? "atlas" : notesOpen ? "notes" :
-                                          devOpen ? "dev" : installOpen ? "install" : systemOpen ? "system" : devicesOpen ? "devices" :
+                                          devOpen ? "dev" : installOpen ? "install" : systemOpen ? "system" : devicesOpen ? "devices" : gameOpen ? "game" :
                                           appsOpen ? "apps" : ""
     // Lite look (no GPU / minimal tier): decorative motion stops; the core and real data still live.
     readonly property bool lite: !!(shell.render || {}).lite
@@ -104,7 +118,7 @@ Window {
     function openPage(name) {
         settingsOpen = name === "settings"; missionsOpen = name === "missions"; atlasOpen = name === "atlas"
         notesOpen = name === "notes"; devOpen = name === "dev" && shell.developerMode
-        systemOpen = name === "system"; devicesOpen = name === "devices"; appsOpen = name === "apps"
+        systemOpen = name === "system"; devicesOpen = name === "devices"; appsOpen = name === "apps"; gameOpen = name === "game"
         installOpen = name === "install" && !!(shell.installer || {}).live
         if (name === "") Qt.callLater(() => focusInput.forceActiveFocus())
     }
@@ -121,6 +135,8 @@ Window {
         else if (key === "control") toggleControl()
         else if (key === "search") openSearch()
         else if (key === "keys") keysOpen = true
+        // APVIS for Windows: the power button closes the app (Windows itself is shut down from Windows).
+        else if (key === "power" && typeof desktopApp !== "undefined" && desktopApp) Qt.quit()
         else if (key === "power") powerMenuOpen = !powerMenuOpen
         else if (key === "ask") { openPage(""); focusInput.forceActiveFocus() }
         else if (key === "continuity") { openPage(""); shell.askQuestion("what was I doing?") }
@@ -270,7 +286,8 @@ Window {
             opacity: 1 - root.expand; visible: opacity > 0.01
             TaskCard { width: parent.width; order: 2; shown: homeLayer.shown; onGo: key => root.act(key) }
             RouteCard { width: parent.width; order: 3; shown: homeLayer.shown; onGo: key => root.act(key) }
-            ActivityCard { width: parent.width; order: 4; shown: homeLayer.shown; visible: root.tall; rows: 4; onGo: key => root.act(key) }
+            ActivityCard { width: parent.width; order: 4; shown: homeLayer.shown; visible: root.tall && !root.game.available; rows: 4; onGo: key => root.act(key) }
+            GameCard { width: parent.width; order: 4; shown: homeLayer.shown; visible: !!root.game.available; g: root.game; onGo: key => root.act(key) }
             IntelCard { width: parent.width; order: 5; shown: homeLayer.shown; onGo: key => root.act(key) }
         }
 
@@ -396,6 +413,7 @@ Window {
         PageSlot { open: root.devOpen; DeveloperPage { id: devPage; anchors.fill: parent } }
         PageSlot { open: root.systemOpen; SystemPage { anchors.fill: parent } }
         PageSlot { open: root.devicesOpen; DevicesPage { anchors.fill: parent } }
+        PageSlot { open: root.gameOpen; GamePage { anchors.fill: parent; g: root.game } }
         PageSlot { open: root.appsOpen; AppsPage { id: appsPage; anchors.fill: parent; onAct: key => root.act(key) } }
         PageSlot { open: root.notesOpen && !root.sharedDisplay
                    MemoryPage { id: memoryPage; anchors.fill: parent; onSuggest: text => root.suggestAsk(text) } }

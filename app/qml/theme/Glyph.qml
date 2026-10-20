@@ -37,6 +37,14 @@ Item {
                 c.lineWidth = Math.max(1.4, m * .085)
                 for (let i = 0; i < 6; ++i) { const mid = i * Math.PI / 3 + Math.PI / 6; c.beginPath(); c.arc(cx, cy, m * .29, mid - .32, mid + .32); c.stroke() }
                 c.fillStyle = glyph.accent; circle(.5, .5, .1, true)
+            } else if (k === "game") {
+                // A controller: body, d-pad, two buttons.
+                c.beginPath(); c.moveTo(w*.22,h*.30); c.lineTo(w*.78,h*.30); c.quadraticCurveTo(w*.96,h*.30,w*.94,h*.56)
+                c.lineTo(w*.90,h*.74); c.quadraticCurveTo(w*.86,h*.86,w*.74,h*.80); c.lineTo(w*.62,h*.68); c.lineTo(w*.38,h*.68)
+                c.lineTo(w*.26,h*.80); c.quadraticCurveTo(w*.14,h*.86,w*.10,h*.74); c.lineTo(w*.06,h*.56)
+                c.quadraticCurveTo(w*.04,h*.30,w*.22,h*.30); c.closePath(); c.stroke()
+                line(.24,.49,.38,.49); line(.31,.42,.31,.56)
+                circle(.66,.45,.035,true); circle(.74,.53,.035,true)
             } else if (k === "home") {
                 c.beginPath(); c.moveTo(w*.14,h*.48); c.lineTo(cx,h*.14); c.lineTo(w*.86,h*.48); c.stroke()
                 c.beginPath(); c.moveTo(w*.24,h*.42); c.lineTo(w*.24,h*.86); c.lineTo(w*.76,h*.86); c.lineTo(w*.76,h*.42); c.stroke()

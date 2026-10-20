@@ -13,7 +13,9 @@ Item {
         ["", "Home", "home"], ["files", "Files", "files"], ["apps", "Apps", "apps"],
         ["system", "System", "chip"], ["devices", "Devices", "device"], ["atlas", "Intelligence", "brain"],
         ["missions", "Automation", "gear"], ["notes", "Memory", "memory"], ["settings", "Settings", "settings"]
-    ].concat(shell.developerMode ? [["dev", "Developer", "terminal"]] : [])
+    ].concat((typeof shell.game !== "undefined" && shell.game && shell.game.available) || (typeof previewPage !== "undefined" && previewPage.indexOf("game") >= 0)
+              ? [["game", "Game", "game"]] : [])
+     .concat(shell.developerMode ? [["dev", "Developer", "terminal"]] : [])
     property Item chosen: null
     implicitHeight: col.height
     implicitWidth: 190

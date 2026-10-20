@@ -11,7 +11,7 @@ from .server import HOST, PORT, ApiError, Request, route
 
 # Home registers "command" here while it runs: (kind, value) -> None, e.g. ("page", "apps").
 HOME_HOOKS: dict[str, Any] = {}
-HOME_PAGES = {"", "apps", "settings", "system", "devices", "atlas", "missions", "notes"}
+HOME_PAGES = {"", "apps", "settings", "system", "devices", "atlas", "missions", "notes", "game"}
 
 
 @route("POST", "/v1/home", "Open a Home page or ask on screen (Win+Space uses this)",

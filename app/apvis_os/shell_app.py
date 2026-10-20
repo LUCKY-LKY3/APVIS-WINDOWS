@@ -282,6 +282,8 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
         reminderDue = Signal(str, str)        # (text, "reminder"|"timer") when one comes due
         windowsChanged = Signal()
         _windowsUpdate = Signal("QVariantList")   # open app windows, read off the UI thread
+        gameChanged = Signal()
+        _gameUpdate = Signal("QVariantMap")      # APVIS for Windows: the game card (from the apvis-game thread)
 
         def __init__(self) -> None:
             super().__init__()
@@ -369,6 +371,13 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
             self._status_wake = threading.Event()
             self._stopping = False
             threading.Thread(target=self._status_loop, name="apvis-status", daemon=True).start()
+            self._game: dict[str, object] = {"available": False, "active": False}
+            self._game_stop = threading.Event()
+            self._game_thread: threading.Thread | None = None
+            self._gameUpdate.connect(self._apply_game)
+            if sys.platform == "win32" or os.environ.get("APVIS_GAME_MODE") == "1":
+                self._game_thread = threading.Thread(target=self._game_loop, name="apvis-game", daemon=True)
+                self._game_thread.start()
             self._settings: dict[str, object] = {"ollamaUrl": "", "test": "", "testOk": False, "saved": ""}
             self._settingsUpdate.connect(self._apply_settings)
             # V3: meaning search for the vault. The index is kept current in the background, as background
@@ -578,6 +587,29 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
         @Property("QVariantMap", notify=askChanged)
         def ask(self) -> dict[str, object]:
             return self._ask
+
+        @Property("QVariantMap", notify=gameChanged)
+        def game(self) -> dict[str, object]:
+            return self._game
+
+        @Slot("QVariantMap")
+        def _apply_game(self, update: dict[str, object]) -> None:
+            self._game = update
+            self.gameChanged.emit()
+
+        def _game_loop(self) -> None:
+            """The game card: which game is playing and its stats, every 2 s (gamelink.py)."""
+            from . import gamelink
+            link = gamelink.GameLink()
+            try:
+                while not self._game_stop.is_set():
+                    try:
+                        self._gameUpdate.emit(link.sample())
+                    except Exception as exc:  # keep sampling; one bad read must not end the card
+                        print(f"apvis-game: {exc}", file=sys.stderr)
+                    self._game_stop.wait(2.0)
+            finally:
+                link.close()
 
         @Property("QVariantMap", notify=systemChanged)
         def system(self) -> dict[str, object]:
@@ -2557,6 +2589,9 @@ def run(qml_path: Path = QML_HOME, *, windowed: bool = False, smoke_screenshot: 
         bridge._status_wake.set()
         bridge._atlas_wake.set()
         bridge._world_wake.set()
+        bridge._game_stop.set()
+        if bridge._game_thread is not None:
+            bridge._game_thread.join(3.0)   # lets it write the open game session down
     app.aboutToQuit.connect(stop_threads)
     engine._shell_bridge = bridge  # Keep context property alive.
     engine._shell_timer = timer
