@@ -92,7 +92,7 @@ void MAIN()
     float e = uEnergy;
     // darker and bluer than the references so it sits in the dark dashboard (owner, 2026-10-20)
     vec3 tint = mix(uTint.rgb, vec3(0.12, 0.62, 1.0), 0.35) * 0.85;
-    vec3 hi = mix(uHi.rgb, vec3(0.6, 0.85, 1.0), 0.4) * 0.8;
+    vec3 hi = vec3(0.16, 0.52, 1.0);                   // all blue, no white (owner, 2026-10-20)
     float s = 0.53 * (1.0 + 0.03 * e * sin(t * 3.0));
     float yaw = t * (0.10 + 0.45 * e);
     vec3 col = vec3(0.0);
@@ -123,6 +123,10 @@ void MAIN()
 
     col *= uStrength;
 
+    // bright points keep their hue instead of clipping to white
+    float peak = max(col.r, max(col.g, col.b));
+    if (peak > 1.0)
+        col /= peak;
     float alpha = clamp(max(col.r, max(col.g, col.b)), 0.0, 1.0);
     FRAGCOLOR = vec4(col, alpha);
 }

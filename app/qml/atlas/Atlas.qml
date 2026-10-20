@@ -420,6 +420,7 @@ Item {
         AtlasGlobe {
             id: globeView
             anchors.fill: parent
+            smooth: typeof windowsApp !== "undefined" && windowsApp && !((shell.game || {}).active)
             anchors.leftMargin: 56                                     // clear of the layer rail
             anchors.rightMargin: atlas.sideOpen ? side.width + 24 : 0   // centred in the free space
             Behavior on anchors.rightMargin { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }

@@ -80,10 +80,21 @@ Item {
     onLon0Changed: art.requestPaint()
     onLat0Changed: art.requestPaint()
 
+    // APVIS for Windows: turn at the display's refresh rate (60/144 Hz) instead of the OptiPlex's ~25 fps.
+    property bool smooth: false
+    FrameAnimation {
+        running: globe.visible && !globe.still && globe.smooth
+        onTriggered: {
+            const dt = Math.min(0.1, frameTime)
+            globe.phase = (globe.phase + 0.45 * dt) % 1
+            if (!drag.pressed && Date.now() > globe.idleUntil && !turnTo.running) globe.lon0 = (globe.lon0 + 3 * dt) % 360
+            art.requestPaint()
+        }
+    }
     // ~25 fps turning and pulsing while visible (paused while dragging, after a pick, or with Reduce motion).
     Timer {
         interval: 40; repeat: true
-        running: globe.visible && !globe.still
+        running: globe.visible && !globe.still && !globe.smooth
         onTriggered: {
             globe.phase = (globe.phase + 0.018) % 1
             if (!drag.pressed && Date.now() > globe.idleUntil && !turnTo.running) globe.lon0 = (globe.lon0 + 0.12) % 360
@@ -153,6 +164,15 @@ Item {
         }
     }
 
+    // APVIS for Windows: land, grid, night and shading on the GPU (the Canvas below then skips them).
+    readonly property bool gpu: smooth
+    GlobeBase {
+        anchors.fill: parent
+        visible: globe.gpu
+        lon0: globe.lon0; lat0: globe.lat0
+        radius: globe.radius; centre: Qt.point(globe.cx, globe.cy)
+        sun: globe.sunNow; night: globe.night
+    }
     // Dynamic: graticule, land, events.
     Canvas {
         id: art
@@ -163,6 +183,7 @@ Item {
             c.reset(); c.clearRect(0, 0, width, height)
             if (R < 10) return
             // Graticule (front half only).
+            if (!globe.gpu) {
             c.strokeStyle = globe.rgba(Theme.accent, 0.13); c.lineWidth = 0.8
             c.beginPath()
             for (let lo = -180; lo < 180; lo += 30) {
@@ -180,12 +201,14 @@ Item {
                 }
             }
             c.stroke()
+            }
             // Continents: projected coastline rings; the far side folds onto the limb.
             const a = globe.lon0 * Math.PI / 180, p = globe.lat0 * Math.PI / 180
             const ca = Math.cos(a), sa = Math.sin(a), cp = Math.cos(p), sp = Math.sin(p)
             const P = (x, y, z) => { const x1 = x * ca - z * sa, z1 = z * ca + x * sa
                                      return [x1, y * cp - z1 * sp, y * sp + z1 * cp] }
             const cx0 = globe.cx, cy0 = globe.cy
+            if (!globe.gpu) {
             c.beginPath()
             for (const ring of globe.landUnits) {
                 let any = false
@@ -218,9 +241,10 @@ Item {
                 }
             }
             c.stroke()
+            }
             // Night: the half of the sphere facing away from the sun, bounded by
             // the terminator (a great circle, drawn exactly).
-            if (globe.night) {
+            if (globe.night && !globe.gpu) {
                 const S = globe.sun()
                 const s2 = P(S[0], S[1], S[2])
                 // Two unit vectors across the terminator circle.
@@ -261,7 +285,8 @@ Item {
                 for (const q of ring) { if (q[2] > 0) { pen ? c.lineTo(cx0 + R * q[0], cy0 - R * q[1]) : c.moveTo(cx0 + R * q[0], cy0 - R * q[1]); pen = true } else pen = false }
                 c.stroke()
                 globe.sunNow = S
-            }
+            } else if (globe.night) globe.sunNow = globe.sun()
+            if (!globe.gpu) {
             // Sphere shading: a highlight up-left and the limb darkening.
             const hi = c.createRadialGradient(cx0 - R * 0.4, cy0 - R * 0.45, 0, cx0 - R * 0.4, cy0 - R * 0.45, R * 0.9)
             hi.addColorStop(0, Theme.css(Theme.sheenBase, 0.08)); hi.addColorStop(1, Theme.css(Theme.sheenBase, 0))
@@ -269,6 +294,7 @@ Item {
             const limb = c.createRadialGradient(cx0, cy0, R * 0.62, cx0, cy0, R)
             limb.addColorStop(0, Theme.css(Theme.shadeBase, 0)); limb.addColorStop(1, Theme.css(Theme.shadeBase, 0.5))
             c.fillStyle = limb; c.fill()
+            }
             // Oceans and cities.
             c.textAlign = "center"
             c.font = "italic " + Math.max(9, R * 0.028) + "px sans-serif"

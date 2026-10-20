@@ -225,7 +225,7 @@ Window {
         expanded: root.expand
         vsync: !(shell.render || {}).software
         idlePace: root.userIdle ? 12 : 24
-        smooth: root.app && !root.userIdle && !root.game.active   // not while a game wants the GPU
+        smooth: root.app && !root.game.active   // display rate in the app, even while you just watch; not while a game wants the GPU
         gaming: !!root.game.active
         paused: !root.active && !root.previewWindowed
         answerScale: root.answerScale
